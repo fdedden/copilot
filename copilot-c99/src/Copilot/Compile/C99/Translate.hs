@@ -17,9 +17,9 @@ transexpr :: Expr a -> State FunEnv C.Expr
 transexpr (Const ty x) = return $ constty ty x
 
 transexpr (Local ty1 _ name e1 e2) = do
-  e1' <- transexpr e1
+  e1' <- transinit e1
   let cty1 = transtype ty1
-      init = Just $ C.InitExpr e1'
+      init = Just e1'
   statetell [C.VarDecln Nothing cty1 name init]
 
   transexpr e2
@@ -49,6 +49,20 @@ transexpr (Op3 op e1 e2 e3) = do
   e2' <- transexpr e2
   e3' <- transexpr e3
   return $ transop3 op e1' e2' e3'
+
+
+transinit :: Expr a -> State FunEnv C.Init
+transinit (Const ty x) = return $ constinit ty x
+transinit (Local ty1 _ name e1 e2) = do
+  e1' <- transinit e1
+  let cty1 = transtype ty1
+      init = Just e1'
+  statetell [C.VarDecln Nothing cty1 name init]
+  transinit e2
+transinit e = do
+  e' <- transexpr e
+  return $ C.InitExpr e'
+
 
 -- | Translates a Copilot unary operator and its argument into a C99
 -- expression.
