@@ -34,53 +34,92 @@ paint :: Int     -- ^ Number of steps to interpret.
       -> Spec    -- ^ Specification to interpret.
       -> IO ()
 paint k spec =
-    paintEvaluation e
+    paintEvaluation spec e
   where
     e = eval Haskell k spec
 
-paintEvaluation :: ExecTrace
+paintEvaluation :: Spec
+                -> ExecTrace
                 -> IO ()
-paintEvaluation e = do
+paintEvaluation spec e = do
     putStrLn "\\documentclass{standalone}"
     putStrLn "\\usepackage{tikz}"
     putStrLn "\\usepackage{tikz-timing}"
     putStrLn "\\begin{document}"
     putStrLn "\\begin{tikztimingtable}"
+    printObserverOutputs
     printTriggerOutputs
     putStrLn "\\end{tikztimingtable}"
     putStrLn "\\end{document}"
-    printObserverOutputs
   where
-
-    printTriggerOutputs = mapM_ (printTriggerOutput) trigs
-
-    printTriggerOutput (name, ls) = putStrLn $ name ++ " & "
-                                                 ++ concatMap printTriggerOutputListElem ls
-                                                 ++ "\\\\"
-
-    printTriggerOutputListElem Nothing  = ""
-    printTriggerOutputListElem (Just x) = showValues x
-
-    showValues [] = ""
-    showValues ls@(x:_)
-      | isBoolean x = showValuesBoolean ls
-      | otherwise   = showValuesNumber  ls
-
-    showValuesBoolean ls = concatMap showValuesBooleanSegment $ group ls
-
-    showValuesBooleanSegment ls = show (length ls) ++ highOrLow (head ls)
+    signal :: String -> [String] -> String
+    signal name values = format name <> " & " <> concat values <> "\\\\"
       where
-        highOrLow "true"  = "H"
-        highOrLow "false" = "L"
+        format n = "$" <> n <> "$"
 
-    showValuesNumber ls = concatMap showValuesNumberSegment $ group ls
+    printTriggerOutputs :: IO ()
+    printTriggerOutputs = mapM_ putStrLn (map printTriggerOutput trigs)
+      where
+        printTriggerOutput :: (String, [Maybe [Output]], Int) -> String
+        printTriggerOutput (name, ls, argsLength) =
+          signal name trig
+          <>
+          concatMap (\(v, n) -> signal n (showValues v)) (zip (args argsLength) argNames)
+          where
+            trig :: [String]
+            trig = concatMap printTriggerOutputListElem ls
 
-    showValuesNumberSegment ls =
-       show (length ls) ++ "D{" ++ (head ls) ++ "}"
+            args :: Int -> [[Maybe Output]]
+            args argsLength = transpose $ transMaybes ls argsLength
 
-    printObserverOutputs = return ()
+            argNames = [name <> "_{arg" <> show n <> "}" | n <- [0..]]
 
-    trigs = interpTriggers e
+        -- Push Maybe's to inner level.
+        transMaybes :: [Maybe [Output]] -> Int -> [[Maybe Output]]
+        transMaybes []       _          = []
+        transMaybes (xs:xss) argsLength = case xs of
+          Just xs' -> map Just xs' : transMaybes xss argsLength
+          Nothing  -> replicate argsLength Nothing : transMaybes xss argsLength
+
+        -- Ignores the value, just interprets as a boolean
+        printTriggerOutputListElem :: Maybe [Output] -> [String]
+        printTriggerOutputListElem Nothing = ["H"]
+        printTriggerOutputListElem (Just _) = ["L"]
+
+    ---------------------------------------------------------------------------
+    printObserverOutputs :: IO ()
+    printObserverOutputs = mapM_ putStrLn (map observerOutput obsvs)
+      where
+        observerOutput (name, ls) = signal name (showValues $ map Just ls)
+
+    ---------------------------------------------------------------------------
+    showValues :: [Maybe String] -> [String]
+    showValues = map showValue
+
+    showValue :: Maybe String -> String
+    showValue Nothing = "S"
+    showValue (Just s) | isBoolean s = showValueBoolean s
+                       | otherwise   = showValueNumber s
+
+    showValueBoolean :: String -> String
+    showValueBoolean "true"  = "D{T}"
+    showValueBoolean "false" = "D{F}"
+
+    showValueNumber :: String -> String
+    showValueNumber n = "D{" <> n <> "}"
+    ---------------------------------------------------------------------------
+
+    trigs :: [(String, [Maybe [Output]], Int)]
+    trigs = map addArgsLength (interpTriggers e)
+      where
+        addArgsLength :: (String, [Maybe [Output]]) -> (String, [Maybe [Output]], Int)
+        addArgsLength (name, output) = (name, output, argsLength)
+          where
+            argsLength = case find (\t -> triggerName t == name) (specTriggers spec) of
+              Nothing -> error "Couldn't find given trigger in spec, should never occur!"
+              Just t -> length $ triggerArgs t
+
+    obsvs :: [(String, [Output])]
     obsvs = interpObservers e
 
 isBoolean "true" = True
